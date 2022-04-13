@@ -1,0 +1,255 @@
+#!markdown
+
+# Debugging with Powershell
+
+## Agenda
+1) What is Code Debugging?
+1) Tips for Logging and Tracing
+1) Why use the debugger?
+1) Common ways to use the debugger
+    1) ISE
+    1) VSCode
+    1) CommandLine
+1) Tips and Tricks with Debugging
+1) Remote Debugging
+
+#!markdown
+
+## What is Debugging?
+
+Code debugging is just the practice of isolating code to make it easier to find the part of your code causing issues. 
+
+There are several techniques that can be used to make debugging easier:
+1) Running code in segments
+1) Logging 
+1) Write targeted tests
+1) Break code into smaller chunks and make cmdlets
+1) debugger
+
+#!markdown
+
+## Logging and Tracing
+
+* Start-Transcript - The easiest way to do logging
+* Set-PSDebug - Great for watching what PowerShell is doing at every step.
+
+#!pwsh
+
+#Transcript example
+
+Start-Transcript -Path "$env:temp\DebugTranscript.log" -force
+foreach ($i in 1..3) {
+    Write-Output $i
+    Write-verbose -message "Verbose $i"
+    Write-Debug -Message "Debug $i"
+    Write-Warning -Message "Warning $i"
+    Write-Error -Message "Error $i" -erroraction Continue
+
+    # Debug and Verbose Have to be enabled to log in transcripts
+    $VerbosePreference = 'Continue'
+    $DebugPreference = 'Continue'
+}
+Stop-Transcript
+start-process -FilePath (Where.exe notepad)[0] -ArgumentList "$env:temp\DebugTranscript.log"
+
+#!pwsh
+
+#Trace with Set-PSDebug
+
+Set-PSDebug -Trace 2 
+foreach ($i in 1..3) {
+    $i
+}
+Set-PSDebug -off
+
+#!markdown
+
+## Why use a debugger
+* It lets you interact with the code while running!
+* Shows you the status of variables
+* Stop at the commands, lines or Variable updates you want
+* Great for troubleshooting intermittent issues 
+* Lets you dive into a module context and other hard to reach contexts
+
+#!markdown
+
+## Interactive VS Logging VS Debugging
+
+||Interactive| Setup Time| Module Debugging| 
+|-|-|-|-|
+|Debugging|Yes|Low|Yes|
+|Interactive Session|Yes|?|No|
+|Logging|No|Medium|?|
+|Unit Tests|No|High|Yes| 
+
+#!markdown
+
+## Different ways to use the debugger
+### ISE
+* Built in and ready to go
+* Hovering over variables shows value
+* highlights the step
+
+### VSCode
+* Built in but needs some configuration
+    1) Attach
+    1) Interactive
+    1) Launch
+* Shows all variables
+* List and edit breakpoints
+
+### Commandline
+* The most amount of control
+* Useful anywhere you can be interactive
+
+    1) Wait-Debugger
+    1) Set-PSBreakpoint
+    1) Debug-Job
+    1) get-pscallstack
+
+#!markdown
+
+## Configuring VSCode
+
+1) Install OmniSharp and other dependencies  
+1) Create launch.json file -> Powershell -> Current File
+
+#!pwsh
+
+#Breakpoint Demo
+
+# Jypter Notebooks dont do well with Debug. Copy and paste this outside.
+# Script with logic bug we need to step through
+Set-PSBreakpoint -Command 'Import-Module'
+#Set-PSBreakpoint -Variable 'Counter'
+{
+    Set-Location C:\Repos\MMS\PowershellDebugging\
+    Import-Module .\Module.psm1
+
+    $Loops = 10
+    $BreakPoint = 3
+    
+    #wait-debugger
+    :LoopName For ($Counter = 0; $Counter -LT $loops; $Counter++){
+        If ($Counter = $BreakPoint){
+            Break LoopName
+        }
+        "Sleeping $Counter"
+        #Inspect Module
+        Start-UDFSleep
+    }
+}.invoke()
+Get-PSBreakpoint| Remove-PSBreakpoint
+
+#!markdown
+
+# Tips and Tricks with Debugging
+
+1) Try Catch for finding Intermittent issues
+    Try{YourCode}Catch{Wait-Debugger}
+
+1) Conditional Triggers
+    Set-PSBreakpoint -Variable counter -Action {If ($Counter -eq 1){Break}}
+
+1) Interactive warning
+    Set-PSBreakpoint -Variable 'Counter' -Action {Write-Warning -Message "Counter = $Counter"}
+
+#!pwsh
+
+# Easy Try Catch Demo
+$Scriptblock = {
+    $Variable = 'test'
+    try{
+        Write-Error "testError" -Erroraction Stop
+    }Catch{
+        Wait-Debugger
+    }
+    Start-UDFSleep 
+}
+invoke-command $Scriptblock 
+
+#!pwsh
+
+# Conditional Trigger
+Set-PSBreakpoint -Variable 'Counter' -Action {if($Counter -eq 5){Wait-Debugger}} 
+$Counter = 2
+$Counter = 5
+
+#!markdown
+
+## Remote Debugging
+1) Useful when troubleshooting scripts running non-interactively.
+1) Can debug on remote system.
+1) Can debug processes running under different accounts like system. 
+
+### Key Commands
+    1) Get-PSHostProcessInfo
+    1) Enter-PSHostProcess
+    1) get-Runspace
+    1) Debug-Runspace
+
+#!pwsh
+
+# Run this on your target environment
+# C:\Repos\Utilities\SysInternals\PSEXEC.exe -s -i cmd
+Set-Location C:\Repos\MMS\PowershellDebugging
+$FilePath = "C:\RunSpaceData.txt"
+Import-Module .\Module.psm1
+
+$RunSpaceData = @{
+    Computername = $ENV:COMPUTERNAME
+    PID = $PID
+    RunSpace = $Host.Runspace.ID
+}
+Out-File -FilePath $FilePath -InputObject (Convertto-json $RunSpaceData)
+
+#Wait
+
+$Seconds = 300
+For ($Counter = 0; $Counter -lt $Seconds; $Counter++){
+    Start-UDFSleep 
+}
+
+#!pwsh
+
+#Run from your IDE such as the ISE
+
+# Entering The Runspace
+whoami.exe
+$FilePath = "C:\RunSpaceData.txt"
+$Content = Get-Content -Path $FilePath -Raw
+$RunSpaceData = ConvertFrom-Json -InputObject $content
+
+If ($RunSpaceData.ComputerName -NE $ENV:COMPUTERNAME){
+    $PSSession = Enter-PSSession -ComputerName $RunSpaceData.ComputerName
+    Invoke-Command -ScriptBlock {Enter-PSHostProcess -ID $args} -ArgumentList $RunSpaceData.PID -Session $PSSession
+    "Debug-Runspace -id $($RunSpaceData.RunSpace)"|clip
+}Else{
+    $RunSpaceData
+    Enter-PSHostProcess -ID $RunSpaceData.PID
+    #get-Runspace
+    #Get-RunspaceDebug
+    "Debug-Runspace -ID $($RunSpaceData.RunSpace)"|clip
+}
+
+# ? or h for help
+
+#!markdown
+
+## Notes
+1) You have to be an admin or the same user to enter the HostProcess 
+1) Holds the remote runspace up until you detach
+1) Errors Easily. Be patient!
+1) Integrated consoles are your friend
+
+#!markdown
+
+## Concerned?
+1) You need to have admin access
+1) This is hard to automate
+1) Timing is super difficult
+1) You can disable debugging
+
+#!pwsh
+
+$Host.Runspace.Debugger.SetDebugMode([System.Management.Automation.DebugModes]::None)
